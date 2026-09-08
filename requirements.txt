@@ -1,0 +1,4 @@
+# The decrypt/catalog layer. Not on PyPI - clone it and `pip install -e .`
+#   https://github.com/HolodoriDB/holodori-asset-tools
+# It pulls in UnityPy, httpx, cryptography, Pillow, tqdm and cricodecs, which
+# is everything the scripts here need.
