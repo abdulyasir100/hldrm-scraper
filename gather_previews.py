@@ -114,6 +114,13 @@ def main() -> int:
                 OUT / "by-character" / f"{cid}.png"
             )
 
+    # names.py recovers most of the roster from the story scripts; use whatever
+    # it found so the sheet arrives part-filled instead of blank
+    known: dict[str, str] = {}
+    if (src := OUT / "names.csv").exists():
+        with open(src, encoding="utf-8") as f:
+            known = {r["character_id"]: r["name"] for r in csv.DictReader(f) if r["name"]}
+
     # the fill-in sheet
     rows = []
     for outfit in outfits:
@@ -122,7 +129,7 @@ def main() -> int:
         rows.append({
             "character_id": cid,
             "outfit_id": outfit,
-            "character_name": "",
+            "character_name": known.get(cid, ""),
             "costume_name": "",
             # "derived" means the game ships no thumbnail and the picture was
             # cut from the model texture — usually a graduated member

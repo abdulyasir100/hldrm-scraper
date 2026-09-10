@@ -50,28 +50,35 @@ python index_local.py                     # or --game "D:/Games/hololiveDreams"
 # 2. see what a character's ids look like before committing to a download
 python pull.py --filter 'live2d_.*_00018[-_]' --list
 
-# 3. thumbnails + previews/naming.csv, so you can work out who each id is
+# 3. recover the id -> name table from the story scripts
+python pull.py --filter '^adv_(main|chr)_[0-9_.-]+$' --fetch --no-extract
+python names.py
+
+# 4. thumbnails + previews/naming.csv, now arriving part-filled
 python pull.py --filter '^img_(chr_icon_mini|cos_2d_thumb)_' --fetch
 python gather_previews.py
 
-# 4. the shared motion library — 189 clips, character-independent, so this
+# 5. the shared motion library — 189 clips, character-independent, so this
 #    only needs running once no matter how many characters you export
 python pull.py --filter '^live2d_mot_' --fetch
 python build_motions.py 00018
 
-# 5. fetch, rebuild and package one character
+# 6. fetch, rebuild and package one character
 python export_character.py 00018 --out out/mychar --name "Display Name"
 ```
 
-Step 5 runs `pull.py` and `build_live2d.py` for you; pass `--no-build` to
+Step 6 runs `pull.py` and `build_live2d.py` for you; pass `--no-build` to
 re-package from what you already have. `build_live2d.py` and `build_physics.py`
 also run standalone if you want a single outfit.
 
 ### Finding the character you want
 
-Ids are opaque (`00018-nrml-0004-00`) and the game ships **no name table** — it
-lives server-side. That is what step 3 exists for: it writes a labelled contact
-sheet plus `previews/naming.csv` for you to fill in by eye, once.
+Ids are opaque (`00018-nrml-0004-00`) and the game ships no name table with the
+models. It does, however, ship the story — and dialogue names people out loud,
+while voice clips carry the speaker's id. `names.py` lines those two up and
+recovers most of the roster on its own; `gather_previews.py` then writes the
+contact sheets with `naming.csv` already part-filled, leaving you to check the
+rows it flags and name the costumes.
 
 Worth knowing: `--fetch` pulls from the CDN by catalog id, not by what your
 account owns, so you get the full roster regardless of what you have unlocked
@@ -83,7 +90,8 @@ in-game. A partial local cache does not limit you.
 |---|---|
 | `index_local.py` | Octo filenames are hex-encoded ASCII ids; decodes them and matches against the catalog |
 | `pull.py` | Stages and decrypts, resolves bundle dependencies, downloads what is missing |
-| `gather_previews.py` | Contact sheets + `naming.csv`, the only way to map ids to characters |
+| `names.py` | Recovers the id → name table by pairing story dialogue with voice-clip ids |
+| `gather_previews.py` | Contact sheets + `naming.csv`, part-filled from `names.py` |
 | `build_live2d.py` | moc3 out of a `CubismMoc` byte array, textures, `exp3.json` from MonoBehaviours |
 | `build_physics.py` | `physics3.json` out of the baked `CubismPhysicsController` rig |
 | `build_motions.py` | `motion3.json` out of Unity's optimised AnimationClips |
