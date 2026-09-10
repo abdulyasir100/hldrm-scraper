@@ -1,4 +1,19 @@
+"""Collect naming material for every Live2D outfit in the game.
 
+Produces, under previews/:
+  characters.png          every character, labelled by id
+  by-character/<id>.png   one strip per character showing its outfits
+  costumes/<outfit>.png   a picture of each outfit
+  naming.csv              the fill-in sheet that drives the character registry
+
+The ids are opaque (00018-nrml-0004-00), so the point of all this is to let a
+human look once and write down what each one actually is.
+
+Some characters ship no storefront art at all - graduated members keep their
+model and voice but lose their icon and thumbnails - so for those the picture
+is taken from the model's own texture instead. Without that they would be
+invisible here, which is precisely where you would go looking for them.
+"""
 from __future__ import annotations
 
 import csv
@@ -21,6 +36,20 @@ ICON = "img_chr_icon_mini_"
 def first_png(name: str) -> Path | None:
     d = EXTRACTED / name
     return next(iter(sorted(d.glob("*.png"))), None) if d.is_dir() else None
+
+
+def head_tile(outfit: str) -> Image.Image | None:
+    """A stand-in portrait cut from the model's own texture atlas.
+
+    Used when the game ships no thumbnail for an outfit. The atlas is scattered
+    mesh parts and unreadable as a whole, but face and hair are authored into
+    the top-left block, which is enough to recognise someone by.
+    """
+    src = first_png(f"live2d_mdl_{outfit}")
+    if src is None:
+        return None  # the model was never pulled, so there is nothing to cut
+    im = Image.open(src).convert("RGBA")
+    return im.crop((0, 0, im.width // 2, im.height // 3))
 
 
 def label_sheet(items: list[tuple[str, Path]], cols: int, cell: int) -> Image.Image:
@@ -48,21 +77,28 @@ def main() -> int:
     (OUT / "costumes").mkdir(parents=True, exist_ok=True)
     (OUT / "by-character").mkdir(parents=True, exist_ok=True)
 
-    # per-outfit thumbnails, named by the id they belong to
+    # per-outfit pictures, named by the id they belong to
     thumbs: dict[str, Path] = {}
+    derived: set[str] = set()
     for outfit in outfits:
-        src = first_png(f"{COS}{outfit}")
-        if src is None:
-            continue
         dest = OUT / "costumes" / f"{outfit}.png"
-        shutil.copyfile(src, dest)
+        src = first_png(f"{COS}{outfit}")
+        if src is not None:
+            shutil.copyfile(src, dest)
+        elif (tile := head_tile(outfit)) is not None:
+            tile.save(dest)
+            derived.add(outfit)
+        else:
+            continue
         thumbs[outfit] = dest
 
-    # character icons
+    # character icons, falling back to whatever picture the character does have
     chars = sorted({o.split("-")[0] for o in outfits})
     icons: dict[str, Path] = {}
     for cid in chars:
         src = first_png(f"{ICON}{cid}")
+        if src is None:
+            src = next((thumbs[o] for o in outfits if o.startswith(cid) and o in thumbs), None)
         if src is not None:
             icons[cid] = src
 
@@ -88,7 +124,10 @@ def main() -> int:
             "outfit_id": outfit,
             "character_name": "",
             "costume_name": "",
-            "has_thumbnail": "yes" if outfit in thumbs else "no",
+            # "derived" means the game ships no thumbnail and the picture was
+            # cut from the model texture — usually a graduated member
+            "picture": ("derived" if outfit in derived
+                        else "yes" if outfit in thumbs else "no"),
             "on_disk": "yes" if bundle in local else "fetch",
         })
     with open(OUT / "naming.csv", "w", newline="", encoding="utf-8") as f:
@@ -96,9 +135,15 @@ def main() -> int:
         w.writeheader()
         w.writerows(rows)
 
+    gap = [o for o in outfits if o not in thumbs]
     print(f"{len(outfits)} outfits across {len(chars)} characters")
-    print(f"  thumbnails : {len(thumbs)}  ({len(outfits)-len(thumbs)} missing)")
+    print(f"  pictures   : {len(thumbs)}  ({len(derived)} cut from model art)")
     print(f"  icons      : {len(icons)}")
+    if gap:
+        # no thumbnail AND no model on disk — pull these to see who they are
+        # plain ASCII: this prints to cp1252 consoles on Windows
+        print(f"  no picture : {len(gap)} - pull their models, e.g.")
+        print(f"      python pull.py --filter '^live2d_mdl_{gap[0]}$' --fetch")
     print(f"  wrote      : {OUT}")
     return 0
 
