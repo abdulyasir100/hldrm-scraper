@@ -36,6 +36,40 @@ def find_game(explicit: str | None) -> Path:
     )
 
 
+def refresh_catalog(path: Path):
+    """Fetch the live catalogue, falling back to the cached copy when offline.
+
+    catalog.get() returns the cached file whenever one exists and never checks
+    for a newer revision, so after a game update every script silently kept
+    using the old catalogue and missed everything new. This is the step you run
+    after an update, so it is the one that always goes to the network.
+    """
+    old = None
+    if path.exists():
+        try:
+            old = catalog.Catalog.load(path)
+        except Exception:
+            pass
+    try:
+        cat = catalog.fetch()
+        cat.save(path)
+    except Exception as e:
+        if old is None:
+            raise SystemExit(f"could not reach the catalogue and no cached copy exists: {e}")
+        print(f"could not reach the catalogue ({e}) - using the cached copy")
+        return old
+
+    count = lambda c: len(c.assetBundles) + len(c.resources)
+    if old is None:
+        print(f"catalogue: revision {cat.revisionId}, {count(cat)} entries")
+    elif old.revisionId == cat.revisionId:
+        print(f"catalogue: revision {cat.revisionId}, already up to date")
+    else:
+        print(f"catalogue: revision {old.revisionId} -> {cat.revisionId}, "
+              f"{count(cat) - count(old):+d} entries")
+    return cat
+
+
 def decode_name(fn: str) -> str | None:
     """Filenames are hex-encoded ASCII asset ids, e.g. 413230393730 -> A20970."""
     stem = fn.split(".")[0]
@@ -70,7 +104,7 @@ def main() -> int:
     game = find_game(args.game)
     print(f"game: {game}")
 
-    cat = catalog.get(HERE / "octo_list.json")
+    cat = refresh_catalog(HERE / "octo_list.json")
     byid = {("A", e.id): e for e in cat.assetBundles}
     byid.update({("R", e.id): e for e in cat.resources})
 
