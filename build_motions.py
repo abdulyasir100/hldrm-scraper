@@ -1,3 +1,17 @@
+"""Convert the game's Unity AnimationClips into Cubism .motion3.json files.
+
+The clips are Unity's optimised form: curves packed into streamed / dense /
+constant arrays, bound by CRC32 hashes instead of names. Streamed keys carry the
+cubic polynomial coefficients for each span, so the original curve shape can be
+reconstructed exactly rather than flattened to straight lines between keys.
+
+The motions carry no character id - they drive parameters every Cubism model
+exposes - so one conversion serves any scraped character. The id argument only
+names the rig used to turn the hashed curve bindings back into parameter names.
+
+Usage:
+    python build_motions.py 00018 [outdir] [--fps 30] [--limit N]
+"""
 from __future__ import annotations
 
 import argparse

@@ -1,3 +1,17 @@
+"""Pull hololive Dreams assets, preferring the local install over the CDN.
+
+Local octo blobs are named by hex-encoded asset id (A<id> bundles, R<id> resources).
+The octo catalog maps those ids to readable names; the header mask keys on the name,
+so we decrypt into a staging dir named by catalog name, then run the extractor.
+
+Anything the game never downloaded is fetched from the asset CDN with --fetch.
+Dependencies are resolved through the catalog: bundle deps for assetbundles, and
+the .acb/.awb sibling for streamed audio.
+
+Usage:
+    python pull.py --filter 'live2d_.*_00018[-_]' --list
+    python pull.py --filter '_00018[-_]' --fetch
+"""
 from __future__ import annotations
 
 import argparse
@@ -17,6 +31,9 @@ HERE = Path(__file__).parent
 STAGE = HERE / "staged"
 OUT = HERE / "extracted"
 
+# Some resources ship unencrypted. crypto.decrypt only recognises QUAVMAGIC
+# (resource) and UnityFS (bundle), so a plain CRI file would fall through to the
+# bundle mask and get corrupted. Detect those and pass them through untouched.
 PLAIN_MAGICS = (b"@UTF", b"AFS2", b"CRID")
 
 
@@ -108,6 +125,8 @@ def main() -> int:
     if args.no_extract:
         return 0
     OUT.mkdir(exist_ok=True)
+    # invoked as a module so this works from any venv, on any platform,
+    # without depending on where the console script landed
     return subprocess.call(
         [sys.executable, "-m", "holodori_asset_tools", "extract", str(STAGE), str(OUT)]
     )

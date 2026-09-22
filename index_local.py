@@ -1,3 +1,18 @@
+"""Index a local hololive Dreams install -> catalog entries.
+
+The game stores downloaded assets under octo filenames that are hex-encoded
+ASCII ids, with no hint of what they contain. This walks the install, decodes
+those names, and matches them against the octo catalog so later steps can ask
+for assets by readable name and reuse whatever is already on disk instead of
+re-downloading it.
+
+It is also the step to run after a game update: it always fetches the live
+catalogue, since every other script reuses the cached copy.
+
+Usage:
+    python index_local.py                       # auto-detect the Steam install
+    python index_local.py --game "D:/Games/hololiveDreams"
+"""
 from __future__ import annotations
 
 import argparse

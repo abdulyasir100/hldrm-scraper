@@ -12,6 +12,14 @@ Cubism Viewer, the Web SDK and Unity all load directly.
 > it at your own copy of the game and it produces files on your own machine.
 > Whatever it produces stays yours to keep, not to redistribute.
 
+## The easy way
+
+Double-click **`Holodream.bat`**. It opens a window with four numbered steps —
+refresh the catalogue, work out who's who, get a character (Live2D or 3D
+chibi), export a ready-to-use folder — and runs the scripts below for you with
+the right Python and settings. Everything after this section is what those
+buttons do, for when you'd rather use the command line.
+
 ## What it produces
 
 ```
@@ -25,6 +33,8 @@ out/<character>/
         expressions/*.exp3.json
     motions/             *.motion3.json + index.json
     voice/greet.wav
+
+out/chibi/<outfit>.glb   the 3D park model: rigged, skinned, textured glTF
 ```
 
 ## Setup
@@ -65,6 +75,11 @@ python build_motions.py 00018
 
 # 6. fetch, rebuild and package one character
 python export_character.py 00018 --out out/mychar --name "Display Name"
+
+# 3D chibi: the separate park/minigame model, as a .glb for Blender or three.js
+python pull.py --filter '^mdl_chr_drs_00018-' --fetch --no-extract
+python build_chibi.py 00018 nrml-0004-00
+python build_chibi.py 00018 cmmn-0002-00 --hair base-0000-00   # outfit with no hair of its own
 ```
 
 Step 6 runs `pull.py` and `build_live2d.py` for you; pass `--no-build` to
@@ -96,6 +111,8 @@ in-game. A partial local cache does not limit you.
 | `build_physics.py` | `physics3.json` out of the baked `CubismPhysicsController` rig |
 | `build_motions.py` | `motion3.json` out of Unity's optimised AnimationClips |
 | `export_character.py` | Collects one character into a portable folder |
+| `build_chibi.py` | The 3D chibi as one skinned glTF: body + hair rigs merged, outline shells dropped, mouth decal rebuilt as a mesh |
+| `holodream_ui.pyw` | The window behind `Holodream.bat` |
 
 Two details cost real debugging time and are worth reading the comments for:
 
@@ -107,6 +124,11 @@ Two details cost real debugging time and are worth reading the comments for:
   strings, so the names have to be recovered by rebuilding the model's
   transform paths and re-hashing them — which is why `build_motions.py` needs a
   character id even though the motions themselves are shared.
+
+The 3D chibi is a separate asset from the Live2D model — a chibi-proportioned
+rig used in the park and minigames, with the hair on its own small skeleton
+that the game attaches to the head at runtime. `build_chibi.py` merges the two
+and keeps the game's bone names, so animation can be driven by name later.
 
 Physics rigs are **per outfit**, not per character: alt costumes have different
 hair and cloth, so each one's rig comes from its own bundle.

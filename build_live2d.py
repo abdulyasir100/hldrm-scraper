@@ -1,4 +1,14 @@
+"""Reassemble a runnable Live2D Cubism model from extracted Unity bundles.
 
+The game ships Cubism models baked into Unity objects: the .moc3 lives as a byte
+array on a CubismMoc MonoBehaviour, textures as Texture2D, and expressions as
+MonoBehaviours already shaped like .exp3.json. This rebuilds the standard
+on-disk layout (model3.json + moc3 + textures + expressions) that Cubism
+viewers, the Web SDK and Unity all expect.
+
+Usage:
+    python build_live2d.py 00018 [outdir]
+"""
 from __future__ import annotations
 
 import json
@@ -12,6 +22,9 @@ import build_physics
 HERE = Path(__file__).parent
 EXTRACTED = HERE / "extracted"
 
+# Unity's CubismParameterBlendMode is (Override, Additive, Multiply); exp3.json
+# spells those (Overwrite, Add, Multiply). Getting this order wrong silently
+# turns every expression into a no-op rather than erroring.
 BLEND = {0: "Overwrite", 1: "Add", 2: "Multiply"}
 
 MOC3_MAGIC = b"MOC3"
@@ -20,7 +33,7 @@ MOC3_MAGIC = b"MOC3"
 def moc_bytes(model_dir: Path) -> bytes | None:
     """Find the CubismMoc dump in a live2d_mdl bundle and return its raw moc3."""
     for f in model_dir.glob("*.json"):
-        if f.stat().st_size < 100_000:
+        if f.stat().st_size < 100_000:  # the moc is by far the biggest object
             continue
         obj = json.loads(f.read_text())
         raw = obj.get("_bytes")

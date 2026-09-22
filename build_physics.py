@@ -1,3 +1,10 @@
+"""Rebuild a Cubism .physics3.json from the game's baked Unity physics rig.
+
+Live2D ships hair/cloth sway as .physics3.json, but the game bakes it into a
+CubismPhysicsController component. The component's shape maps almost one-to-one
+onto the file format, so this reads the rig out of the model bundle and writes
+the standard file back.
+"""
 from __future__ import annotations
 
 import json
