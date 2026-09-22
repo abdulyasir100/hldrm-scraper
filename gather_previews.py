@@ -3,6 +3,7 @@
 Produces, under previews/:
   characters.png          every character, labelled by id
   by-character/<id>.png   one strip per character showing its outfits
+  all-outfits.png         every outfit on one sheet, labelled with names
   costumes/<outfit>.png   a picture of each outfit
   naming.csv              the fill-in sheet that drives the character registry
 
@@ -21,7 +22,7 @@ import json
 import shutil
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from holodori_asset_tools import catalog
 
@@ -52,9 +53,24 @@ def head_tile(outfit: str) -> Image.Image | None:
     return im.crop((0, 0, im.width // 2, im.height // 3))
 
 
-def label_sheet(items: list[tuple[str, Path]], cols: int, cell: int) -> Image.Image:
+def cjk_font(size: int) -> ImageFont.FreeTypeFont | None:
+    """A font that can draw Japanese names; PIL's built-in one cannot."""
+    for path in (
+        "C:/Windows/Fonts/meiryo.ttc",
+        "C:/Windows/Fonts/msgothic.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+    ):
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    return None
+
+
+def label_sheet(items: list[tuple[str, Path]], cols: int, cell: int,
+                font: ImageFont.FreeTypeFont | None = None, pad: int = 16) -> Image.Image:
     rows = (len(items) + cols - 1) // cols
-    pad = 16
     sheet = Image.new("RGB", (cols * cell, rows * (cell + pad)), "white")
     draw = ImageDraw.Draw(sheet)
     for i, (label, png) in enumerate(items):
@@ -62,7 +78,7 @@ def label_sheet(items: list[tuple[str, Path]], cols: int, cell: int) -> Image.Im
         im.thumbnail((cell - 6, cell - 6))
         x, y = (i % cols) * cell, (i // cols) * (cell + pad)
         sheet.paste(im, (x + 3, y + 3), im)
-        draw.text((x + 3, y + cell + 2), label, fill="black")
+        draw.multiline_text((x + 3, y + cell + 2), label, fill="black", font=font, spacing=2)
     return sheet
 
 
@@ -106,6 +122,13 @@ def main() -> int:
         sheet = label_sheet([(c, p) for c, p in sorted(icons.items())], 12, 150)
         sheet.save(OUT / "characters.png")
 
+    # names.py recovers most of the roster from the story scripts; use whatever
+    # it found so the sheets are labelled and naming.csv arrives part-filled
+    known: dict[str, str] = {}
+    if (src := OUT / "names.csv").exists():
+        with open(src, encoding="utf-8") as f:
+            known = {r["character_id"]: r["name"] for r in csv.DictReader(f) if r["name"]}
+
     # one strip per character, so costumes can be named in context
     for cid in chars:
         mine = [(o, thumbs[o]) for o in outfits if o.startswith(cid) and o in thumbs]
@@ -114,12 +137,17 @@ def main() -> int:
                 OUT / "by-character" / f"{cid}.png"
             )
 
-    # names.py recovers most of the roster from the story scripts; use whatever
-    # it found so the sheet arrives part-filled instead of blank
-    known: dict[str, str] = {}
-    if (src := OUT / "names.csv").exists():
-        with open(src, encoding="utf-8") as f:
-            known = {r["character_id"]: r["name"] for r in csv.DictReader(f) if r["name"]}
+    # every outfit on one sheet, grouped by character. This is the file people
+    # open first, so it is rebuilt on every run rather than drawn once by hand -
+    # a hand-made one went stale and hid a whole update's worth of costumes
+    font = cjk_font(15)
+    everything = [
+        # the built-in font draws Japanese as boxes, so fall back to bare ids
+        (f"{known.get(o.split('-')[0], '') if font else ''}\n{o}".strip(), thumbs[o])
+        for o in outfits if o in thumbs
+    ]
+    if everything:
+        label_sheet(everything, 12, 170, font=font, pad=40).save(OUT / "all-outfits.png")
 
     # the fill-in sheet
     rows = []
