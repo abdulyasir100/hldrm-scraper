@@ -130,6 +130,33 @@ def bind_matrix(m) -> list[float]:
     return [rows[row][col] * sign[row] * sign[col] for col in range(4) for row in range(4)]
 
 
+def alpha_cutoff(image) -> float | None:
+    """How to treat a texture's alpha: a cutoff to test against, or None for opaque.
+
+    Not every alpha channel is opacity. Eye, face-decal and body textures really
+    are cut out - 2-90% of their pixels are fully transparent, with almost
+    nothing part-way. The hair textures (`_hir_col_alp`) are the opposite: no
+    fully transparent pixel at all, and a broad band of part-way values that the
+    game's shader reads as a shading mask. Alpha-testing that at 0.5 deletes
+    whatever falls under the line, which took the entire crown off one
+    character's hair while leaving another's untouched, purely by how dark her
+    mask happened to be.
+
+    A hair sheet can be both at once: mostly shading mask, plus a few genuinely
+    cut-out accessory pieces. So the shape of the histogram decides. When
+    part-way pixels outnumber fully transparent ones the alpha is a mask, and
+    only the truly transparent pixels are cut; otherwise it is an ordinary
+    cut-out and the usual half-way test applies.
+    """
+    histogram = image.getchannel("A").histogram()
+    total = max(1, image.width * image.height)
+    transparent = histogram[0] / total
+    part_way = sum(histogram[1:128]) / total
+    if part_way > transparent:
+        return 0.02 if transparent > 0.001 else None
+    return 0.5 if transparent else None
+
+
 def add_material(glb: Glb, material, cache: dict) -> int:
     key = material.object_reader.path_id
     if key in cache:
@@ -142,9 +169,9 @@ def add_material(glb: Glb, material, cache: dict) -> int:
         try:
             image = pointer.read().image.convert("RGBA")
             image.thumbnail((TEXTURE_MAX, TEXTURE_MAX))
-            low, _high = image.getchannel("A").getextrema()
-            if low < 250:
-                entry["alphaMode"], entry["alphaCutoff"] = "MASK", 0.5
+            cutoff = alpha_cutoff(image)
+            if cutoff is not None:
+                entry["alphaMode"], entry["alphaCutoff"] = "MASK", cutoff
             else:
                 image = image.convert("RGB")
             data = io.BytesIO()
