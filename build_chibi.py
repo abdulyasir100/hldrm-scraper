@@ -24,6 +24,7 @@ quaternions as (x, -y, -z, w), matrices as S*M*S) and triangle winding is flippe
 from __future__ import annotations
 
 import argparse
+import collections
 import io
 import json
 import struct
@@ -56,6 +57,7 @@ class Glb:
                            "nodes": [], "meshes": [], "skins": [], "materials": [], "textures": [], "images": [],
                            "samplers": [{"magFilter": 9729, "minFilter": 9987}], "accessors": [], "bufferViews": []}
         self.blob = bytearray()
+        self.skin_binds: list[dict[int, list]] = []   # per skin: joint node -> inverse bind matrix
 
     def view(self, data: bytes, target: int | None = None) -> int:
         self.blob += b"\0" * (-len(self.blob) % 4)
@@ -225,6 +227,9 @@ def add_renderer(glb: Glb, renderer, nodes_by_path: dict[int, int], materials: d
 def skin_for(glb: Glb, renderer, nodes_by_path: dict, skins: dict) -> int:
     bone_nodes = tuple(nodes_by_path[bone.path_id] for bone in renderer.m_Bones)
     matrices = [bind_matrix(m) for m in renderer.m_Mesh.read().m_BindPose]
+    # remembered so the joints can be snapped onto these afterwards
+    glb.skin_binds.append({node: [[m[col * 4 + row] for col in range(4)] for row in range(4)]
+                           for node, m in zip(bone_nodes, matrices)})
     skin_key = (bone_nodes, tuple(round(v, 5) for m in matrices for v in m))
     if skin_key not in skins:
         glb.json["skins"].append({"joints": list(bone_nodes), "inverseBindMatrices": glb.accessor(matrices, "f", FLOAT, "MAT4")})
@@ -236,6 +241,21 @@ def skin_for(glb: Glb, renderer, nodes_by_path: dict, skins: dict) -> int:
 
 def _multiply(a, b):
     return [[sum(a[i][k] * b[k][j] for k in range(4)) for j in range(4)] for i in range(4)]
+
+
+def _inverse(m):
+    """General 4x4 inverse by Gauss-Jordan; bind poses can carry scale."""
+    rows = [list(row) + [1.0 if i == j else 0.0 for j in range(4)] for i, row in enumerate(m)]
+    for col in range(4):
+        pivot = max(range(col, 4), key=lambda r: abs(rows[r][col]))
+        rows[col], rows[pivot] = rows[pivot], rows[col]
+        scale = rows[col][col]
+        rows[col] = [v / scale for v in rows[col]]
+        for r in range(4):
+            if r != col and rows[r][col]:
+                factor = rows[r][col]
+                rows[r] = [v - factor * w for v, w in zip(rows[r], rows[col])]
+    return [row[4:] for row in rows]
 
 
 def _local_matrix(transform):
@@ -380,6 +400,77 @@ def add_face_decals(glb: Glb, env, nodes_by_path: dict, materials: dict, skins: 
     return added
 
 
+def _node_matrix(node) -> list[list[float]]:
+    if "matrix" in node:
+        m = node["matrix"]
+        return [[m[col * 4 + row] for col in range(4)] for row in range(4)]
+    x, y, z = node.get("translation", (0, 0, 0))
+    qx, qy, qz, qw = node.get("rotation", (0, 0, 0, 1))
+    sx, sy, sz = node.get("scale", (1, 1, 1))
+    rot = [[1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+           [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+           [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)]]
+    scale = (sx, sy, sz)
+    return [[rot[i][j] * scale[j] for j in range(3)] + [(x, y, z)[i]] for i in range(3)] + [[0, 0, 0, 1]]
+
+
+def snap_joints_to_bind_pose(glb: Glb) -> int:
+    """Put every skinned joint where its own bind matrix says it was skinned.
+
+    The prefab is not saved in the pose the meshes were bound in: the hair's
+    physics (`_sim`) joints sit in a relaxed pose and the thumbs are parked, so
+    those strands render displaced — front hair ends up pushed into the head.
+    Each rig is offset from mesh space as a whole, which is harmless, so the
+    common offset is kept and only the joints that disagree with it are moved.
+    That leaves a model's overall placement and scale untouched.
+    """
+    nodes = glb.json["nodes"]
+    parent = {child: i for i, node in enumerate(nodes) for child in node.get("children", ())}
+
+    world: dict[int, list] = {}
+
+    def world_of(index: int) -> list:
+        if index not in world:
+            local = _node_matrix(nodes[index])
+            up = parent.get(index)
+            world[index] = local if up is None else _multiply(world_of(up), local)
+        return world[index]
+
+    desired: dict[int, list] = {}
+    for binds in glb.skin_binds:
+        offsets = collections.Counter()
+        for node, inverse_bind in binds.items():
+            offset = _multiply(world_of(node), inverse_bind)
+            offsets[tuple(round(v, 4) for row in offset for v in row)] += 1
+        common = [list(offsets.most_common(1)[0][0][i * 4:i * 4 + 4]) for i in range(4)]
+        for node, inverse_bind in binds.items():
+            desired[node] = _multiply(common, _inverse(inverse_bind))
+
+    moved = 0
+
+    def apply(index: int, parent_world: list) -> None:
+        nonlocal moved
+        node = nodes[index]
+        if index in desired:
+            before = world_of(index)
+            here = desired[index]
+            if max(abs(a - b) for ra, rb in zip(before, here) for a, b in zip(ra, rb)) > 1e-6:
+                moved += 1
+            local = _multiply(_inverse(parent_world), here)
+            node.pop("translation", None), node.pop("rotation", None), node.pop("scale", None)
+            node["matrix"] = [local[row][col] for col in range(4) for row in range(4)]
+        else:
+            here = _multiply(parent_world, _node_matrix(node))
+        for child in node.get("children", ()):
+            apply(child, here)
+
+    identity = [[1.0 if r == c else 0.0 for c in range(4)] for r in range(4)]
+    for index in range(len(nodes)):
+        if index not in parent:
+            apply(index, identity)
+    return moved
+
+
 def build(character: str, outfit: str, hair_outfit: str | None, out_dir: Path) -> Path:
     shared = ["m_fef", "submeshoutlinematerial", "t_chr_drs_00000-base-0000-00_eye_rmp", "t_chr_drs_00000-base-0000-00_rmp"]
     body_env = load(f"mdl_chr_drs_{character}-{outfit}_body", shared)
@@ -407,12 +498,14 @@ def build(character: str, outfit: str, hair_outfit: str | None, out_dir: Path) -
             if node is not None:
                 scene_nodes.append(node)
     scene_nodes += add_face_decals(glb, body_env, nodes_by_path, materials, skins)
+    moved = snap_joints_to_bind_pose(glb)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{character}-{outfit}.glb"
     glb.write(path)
     print(f"{path}  {path.stat().st_size / 1e6:.2f} MB  meshes={len(glb.json['meshes'])} bones={len(nodes_by_path)} "
-          f"materials={len(glb.json['materials'])} textures={len(glb.json['images'])}")
+          f"materials={len(glb.json['materials'])} textures={len(glb.json['images'])}"
+          f"{f', {moved} joints snapped to their bind pose' if moved else ''}")
     return path
 
 
